@@ -1,0 +1,49 @@
+name: Auto Merge & Deploy to Main
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [ test ]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge-to-main:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configurar identidades de Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fusión Directa (test -> main)
+        run: |
+          git checkout main
+          git pull origin main
+          git merge origin/test --no-ff -m "ci(auto-merge): Fusión automática de test a main [Skip CI]"
+          git push origin main
+
+      - name: Notificar Despliegue en Main a Telegram
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: markdown
+          message: |
+            🎉 *CÓDIGO PROMOVIDO A MAIN (PRODUCCIÓN)*
+            *Proyecto:* Bid 3D
+            *Rama Origen:* `test`
+            *Rama Destino:* `main`
+            *Ejecutado por:* `${{ github.actor }}`
+            
+            🚀 El proyecto ha sido sincronizado y actualizado exitosamente en `main`.

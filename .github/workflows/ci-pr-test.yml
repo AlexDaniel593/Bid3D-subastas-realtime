@@ -1,0 +1,101 @@
+name: CI & PR Verification (dev -> test)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ test ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Linter / Sintaxis
+        id: lint
+        run: npm run lint --if-present 2>&1 | tee lint_output.log
+
+      - name: Compilación (Build)
+        id: build
+        if: always() && steps.lint.outcome == 'success'
+        run: npm run build --if-present 2>&1 | tee build_output.log
+
+      - name: Pruebas unitarias e integración
+        id: test
+        if: always() && steps.build.outcome == 'success'
+        run: npm test --if-present 2>&1 | tee test_output.log
+
+      # Paso para extraer el resumen exacto del error en caso de fallo
+      - name: Extraer detalles del error
+        if: failure()
+        id: error_details
+        run: |
+          echo "=== CAPTURANDO DETALLES DEL ERROR ==="
+          ERROR_MSG=""
+          if [ -f lint_output.log ] && grep -qi "error" lint_output.log; then
+            ERROR_MSG=\$(tail -n 20 lint_output.log)
+          elif [ -f build_output.log ] && grep -qi "error" build_output.log; then
+            ERROR_MSG=\$(tail -n 20 build_output.log)
+          elif [ -f test_output.log ]; then
+            ERROR_MSG=\$(tail -n 20 test_output.log)
+          else
+            ERROR_MSG="No se pudo capturar el log específico. Revisa los detalles en GitHub Actions."
+          fi
+          
+          # Escapar caracteres de control para multilinea en GitHub Actions Outputs
+          EOF=\$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "DETAILS<<$EOF" >> $GITHUB_OUTPUT
+          echo "$ERROR_MSG" >> $GITHUB_OUTPUT
+          echo "$EOF" >> $GITHUB_OUTPUT
+
+      # Notificación a Telegram cuando OCURRE UN ERROR (con detalle completo)
+      - name: Notificar Error Detallado a Telegram
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: \${{ secrets.TELEGRAM_CHAT_ID }}
+          token: \${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: markdown
+          message: |
+            💥 *FALLO EN LA VERIFICACIÓN DE CÓDIGO (dev ➔ test)*
+            *Proyecto:* Bid 3D
+            *PR:* #${{ github.event.pull_request.number }} -${{ github.event.pull_request.title }}
+            *Autor:* `${{ github.actor }}`
+            *Commit:* `${{ github.sha }}`
+            
+            🚨 *REPORTE DETALLADO DEL ERROR:*
+            ```text
+            \${{ steps.error_details.outputs.DETAILS }}
+            ```
+            
+            🔗 [Ver ejecucion completa en GitHub](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+      # Notificación a Telegram cuando TODO ES EXITOSO
+      - name: Notificar Éxito a Telegram
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: markdown
+          message: |
+            ✅ *VERIFICACIÓN EXITOSA (dev ➔ test)*
+            *Proyecto:* Bid 3D
+            *PR:* #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
+            *Autor:* `${{ github.actor }}`
+            
+            🚀 *Linter, Build y Pruebas pasaron sin errores.*
